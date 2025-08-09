@@ -1,4 +1,5 @@
-# Overview
+# AI Stock Marker Summarizer
+## Overview
 This project retrieves the latest financial news and real-time stock market data, then uses a Hugging Face large language model (LLM) to summarize trends, highlight market movers, and provide insights for investors.
 
 It is an AI-powered market intelligence tool with two versions:
