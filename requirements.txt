@@ -1,0 +1,13 @@
+requests
+smolagents
+transformers
+yfinance
+beautifulsoup4
+huggingface_hub
+time
+os
+datetime
+datetime
+timezone
+yf
+InferenceClient
