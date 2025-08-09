@@ -1,150 +1,173 @@
-#!/usr/bin/env python3
-import os
-import time
-from datetime import datetime, timezone
-from dotenv import load_dotenv
-import requests
+import streamlit as st
 import yfinance as yf
+import requests
+from datetime import date, timedelta
 from huggingface_hub import InferenceClient
+from typing import List, Optional
 
-load_dotenv()
-HF_TOKEN = os.getenv("HF_TOKEN")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+# --- Config ---
+NEWS_API_KEY = st.secrets.get("NEWS_API_KEY") or ""  # Or set in .streamlit/secrets.toml
+HF_TOKEN = st.secrets.get("HF_TOKEN") or ""
 
 HF_PROVIDER = "hyperbolic"
-HF_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct" 
+HF_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
+MAX_NEWS = 5
+MAX_TOKENS = 400
 
-MAX_HEADLINES = 5     
-MAX_PROMPT_CHARS = 25000  
+# --- Hugging Face client (lazy init) ---
+@st.cache_resource(show_spinner=False)
+def get_hf_client() -> InferenceClient:
+    return InferenceClient(provider=HF_PROVIDER, api_key=HF_TOKEN)
 
-# my helper functions
-def get_finance_news(query="stock market", max_headlines=MAX_HEADLINES):
-    """this method fetches the most recent finance headlines via NewsAPI; return list of trimmed headlines."""
+# --- News Fetcher ---
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_news(ticker: str, max_articles=MAX_NEWS) -> List[dict]:
     if not NEWS_API_KEY:
-        return ["No NEWS_API_KEY in environment; skipping news fetch."]
+        return []
     url = "https://newsapi.org/v2/everything"
     params = {
-        "q": query,
+        "q": ticker,
         "sortBy": "publishedAt",
         "language": "en",
-        "pageSize": max_headlines,
-        "apiKey": NEWS_API_KEY
+        "pageSize": max_articles,
+        "apiKey": NEWS_API_KEY,
     }
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        items = []
-        for a in data.get("articles", []):
-            published = a.get("publishedAt", "")
-            title = a.get("title", "").strip()
-            src = a.get("source", {}).get("name", "")
-            # produce a short single-line headline
-            items.append(f"{published} — {title} ({src})")
-        if not items:
-            return ["No recent headlines found for query."]
-        return items
-    except Exception as e:
-        return [f"Error fetching news: {e}"]
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("articles", [])
 
-def get_stock_summary(ticker="AAPL", days=5):
-    """this method gets the recent history and compute a compact numeric summary for a stock."""
-    try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period=f"{days}d", interval="1d", auto_adjust=False)
-        if hist.empty:
-            return f"No history found for {ticker}."
-        # compute metrics
-        closes = hist["Close"].tolist()
-        dates = [d.strftime("%Y-%m-%d") for d in hist.index.to_pydatetime()]
+# --- Stock Data Fetcher ---
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_data(ticker: str, start: date, end: date):
+    df = yf.download(ticker, start=start, end=end)
+    return df
+
+# --- Build AI Prompt ---
+def build_prompt(news: List[dict], stock_df, ticker: str) -> str:
+    news_lines = []
+    for article in news:
+        title = article.get("title", "No Title")
+        source = article.get("source", {}).get("name", "")
+        news_lines.append(f"- {title} ({source})")
+    news_text = "\n".join(news_lines) if news_lines else "No relevant news available."
+
+    closes = stock_df['Close'] if not stock_df.empty else []
+    if not closes.empty:
         latest_close = closes[-1]
-        prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
-        pct_change = (latest_close - prev_close) / prev_close * 100 if prev_close != 0 else 0.0
-        five_day_change = (latest_close - closes[0]) / closes[0] * 100 if len(closes) >= 2 and closes[0] != 0 else 0.0
-        # small textual trend
-        trend = "up" if five_day_change > 0 else ("down" if five_day_change < 0 else "flat")
-        # format a compact table-like string for prompt
-        rows = [f"{d}: {c:.2f}" for d, c in zip(dates, closes)]
-        summary = (
+        prev_close = closes[-2] if len(closes) > 1 else latest_close
+        pct_change_day = (latest_close - prev_close) / prev_close * 100 if prev_close else 0.0
+        pct_change_period = (latest_close - closes[0]) / closes[0] * 100 if len(closes) > 1 else 0.0
+        trend = "up" if pct_change_period > 0 else ("down" if pct_change_period < 0 else "flat")
+        closes_str = "\n".join([f"{d.strftime('%Y-%m-%d')}: ${c:.2f}" for d, c in zip(stock_df.index.to_pydatetime(), closes)])
+        stock_summary = (
             f"TICKER: {ticker}\n"
             f"Latest close: ${latest_close:.2f}\n"
-            f"Change vs prior day: {pct_change:.2f}%\n"
-            f"Change over {days}d: {five_day_change:.2f}% ({trend})\n"
-            f"Recent closes:\n" + "\n".join(rows)
+            f"Change vs prior day: {pct_change_day:.2f}%\n"
+            f"Change over period: {pct_change_period:.2f}% ({trend})\n"
+            f"Recent closes:\n{closes_str}"
         )
-        return summary
-    except Exception as e:
-        return f"Error fetching stock data for {ticker}: {e}"
+    else:
+        stock_summary = f"No stock data available for {ticker} in the selected date range."
 
-def build_prompt(headlines, stock_summary, ticker="AAPL"):
-    """creates a compact prompt for the chat model, trimming if necessary."""
-    # prepare news block
-    news_block = "\n".join(f"- {h}" for h in headlines)
-    # assemble prompt
-    prompt = (
-        "You are a concise financial assistant. Given the news and stock data, provide a short market summary "
-        "(3-6 sentences) covering: overall market tone, notable headlines' likely impact, and the stock-specific "
-        f"implications for {ticker}. Give one bullet list of 3 action-oriented takeaways for an investor (high level).\n\n"
-        "NEWS:\n"
-        f"{news_block}\n\n"
-        "STOCK_DATA:\n"
-        f"{stock_summary}\n\n"
-        "Answer:"
-    )
-    # crude safety trimming
-    if len(prompt) > MAX_PROMPT_CHARS:
-        prompt = prompt[:MAX_PROMPT_CHARS]
-    return prompt
+    prompt = f"""
+You are a financial assistant. Summarize the current market sentiment based on the following news and stock data for {ticker}. Provide a concise summary (3-5 sentences) and 3 action-oriented investor takeaways.
 
-# ---- asking the huggingface chat completion model I chose----
-def ask_llm(prompt, system_message="You are a financial assistant that summarizes market trends."):
+NEWS:
+{news_text}
+
+STOCK DATA:
+{stock_summary}
+
+Summary:
+"""
+    return prompt.strip()
+
+# --- Call Hugging Face Chat Completion ---
+def query_hf(prompt: str) -> Optional[str]:
     if not HF_TOKEN:
-        return "No HF_TOKEN found in environment. Put your Hugging Face API key in .env as HF_TOKEN."
-    client = InferenceClient(provider=HF_PROVIDER, api_key=HF_TOKEN)
+        return "Hugging Face API token not set."
+    client = get_hf_client()
     try:
         completion = client.chat.completions.create(
             model=HF_MODEL,
             messages=[
-                {"role": "system", "content": system_message},
+                {"role": "system", "content": "You are a financial assistant that summarizes market trends."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=400,
-            temperature=0.6,
+            max_tokens=MAX_TOKENS,
+            temperature=0.7,
         )
-        # extracting content
-        choice = completion.choices[0]
-        if hasattr(choice, "message"):
-            content = choice.message.get("content") or choice.message.get("content") if isinstance(choice.message, dict) else None
-        else:
-            # fallback (some clients return "text" or dict)
-            content = choice.get("message", {}).get("content") if isinstance(choice, dict) else None
-        # final fallback: stringify the whole completion
-        if not content:
-            content = str(completion)
+        content = completion.choices[0].message.get("content")
         return content
     except Exception as e:
-        return f"Error calling Hugging Face chat API: {e}"
+        return f"Error calling Hugging Face API: {e}"
 
-# -main func to run
-def main(ticker="AAPL", news_query="stock market"):
-    print(f"Fetching news for: {news_query}")
-    headlines = get_finance_news(query=news_query)
-    print(f"Got {len(headlines)} headlines (showing first {MAX_HEADLINES}):")
-    for h in headlines:
-        print("  ", h)
+# --- Streamlit UI ---
+def main():
+    st.set_page_config(page_title="📈 Finance AI Dashboard", layout="wide")
+    st.title("📈 AI-Powered Finance Dashboard")
+    st.write(
+        "Enter a stock ticker and date range to get the latest news, stock data, and an AI-generated market summary."
+    )
 
-    print(f"\nFetching stock data for: {ticker}")
-    stock_summary = get_stock_summary(ticker=ticker)
-    print(stock_summary)
+    with st.sidebar:
+        ticker = st.text_input("Stock Ticker", "AAPL").upper().strip()
+        today = date.today()
+        default_start = today - timedelta(days=30)
+        start_date = st.date_input("Start Date", default_start)
+        end_date = st.date_input("End Date", today)
+        st.markdown("---")
+        st.caption("Data sources: NewsAPI, Yahoo Finance, Hugging Face")
 
-    prompt = build_prompt(headlines, stock_summary, ticker=ticker)
-    print("\nPrompt length (chars):", len(prompt))
+    if ticker == "":
+        st.warning("Please enter a stock ticker symbol.")
+        return
 
-    print("\nCalling LLM...")
-    llm_answer = ask_llm(prompt)
-    print("\nLLM Response:\n", llm_answer)
+    # Fetch data
+    with st.spinner("Fetching news..."):
+        try:
+            news = fetch_news(ticker)
+        except Exception as e:
+            st.error(f"Failed to fetch news: {e}")
+            news = []
+
+    with st.spinner("Fetching stock data..."):
+        try:
+            stock_df = fetch_stock_data(ticker, start_date, end_date)
+        except Exception as e:
+            st.error(f"Failed to fetch stock data: {e}")
+            stock_df = None
+
+    # Show news headlines
+    st.subheader("📰 Latest News Headlines")
+    if news:
+        for article in news:
+            title = article.get("title", "No Title")
+            source = article.get("source", {}).get("name", "")
+            url = article.get("url", "")
+            st.markdown(f"**[{title}]({url})** - *{source}*")
+    else:
+        st.info("No news found for this ticker.")
+
+    # Show stock chart
+    st.subheader(f"📈 Stock Price Chart: {ticker}")
+    if stock_df is not None and not stock_df.empty:
+        st.line_chart(stock_df["Close"])
+    else:
+        st.info("No stock price data available for the selected dates.")
+
+    # Generate AI summary button
+    if st.button("Generate AI Market Summary"):
+        prompt = build_prompt(news, stock_df, ticker)
+        with st.spinner("Generating AI summary..."):
+            summary = query_hf(prompt)
+            if summary:
+                st.subheader("🤖 AI Market Summary")
+                st.write(summary)
+            else:
+                st.error("Failed to get AI summary.")
 
 if __name__ == "__main__":
-    # doing an example test run case
-    main(ticker="AAPL", news_query="Apple OR AAPL OR stock market")
+    main()
