@@ -116,7 +116,7 @@ def query_hf(prompt: str) -> Optional[str]:
 
 # used streamlit for UI 
 def main():
-    st.set_page_config(page_title="📈 Finance AI Dashboard", layout="wide")
+    st.set_page_config(page_title="Finance AI Dashboard", layout="wide")
     st.title("📈 AI-Powered Finance Dashboard")
     st.write(
         "Enter a stock ticker and date range to get the latest news, stock data, and an AI-generated market summary."
@@ -162,7 +162,7 @@ def main():
         st.info("No news found for this ticker.")
 
     # stock chart
-    st.subheader(f"📈 Stock Price Chart: {ticker}")
+    st.subheader(f" Stock Price Chart: {ticker}")
     if stock_df is not None and not stock_df.empty:
         st.line_chart(stock_df["Close"])
     else:
