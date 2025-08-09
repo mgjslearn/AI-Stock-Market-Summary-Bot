@@ -1,52 +1,76 @@
-## Overview
+# Overview
 This project retrieves the latest financial news and real-time stock market data, then uses a Hugging Face large language model (LLM) to summarize trends, highlight market movers, and provide insights for investors.
 
-It’s an end-to-end AI-powered market intelligence tool:
+It is an AI-powered market intelligence tool with two versions:
 
-Fetch financial news from the News API
+Initial prototype: A simple Python script (basic_stock_summarizer.py) that fetches news and stock data, sends it to the Hugging Face LLM, and prints a summary in the console. This version is minimal and has no user interface.
 
-Retrieve stock data from Yahoo Finance
+Full app with UI: A Streamlit-based interactive web application (main.py) that provides a clean interface for users to input stock tickers, select date ranges, view news headlines and stock charts, and generate AI summaries on demand.
 
-Send both to a Hugging Face LLM
+Initial Prototype (basic_stock_summarizer.py)
+Fetches financial news from News API using a fixed query.
 
-Get a concise market summary in natural language
+Retrieves recent stock data for a fixed ticker using Yahoo Finance.
 
-### Features
+Combines both inputs into a prompt and sends it to a Hugging Face LLM.
+
+Prints the AI-generated market summary in the console.
+
+No graphical or web interface, designed as a simple end-to-end proof of concept.
+
+Full Application with Interface (main.py)
+Built using Streamlit for a user-friendly, interactive dashboard.
+
+Sidebar inputs allow users to enter any stock ticker and date range.
+
+## Displays:
+
+Latest finance news headlines (clickable links).
+
+Interactive stock price charts.
+
+On-demand AI-generated market summaries using Hugging Face LLM.
+
+Includes loading spinners, caching for faster repeated queries, and error handling.
+
+Provides a polished, modern user experience suitable for local use or deployment.
+
+## Features (Both Versions)
 📊 Real-time stock data from Yahoo Finance
 
 📰 Breaking financial news from News API
 
 🤖 AI-generated summaries via Hugging Face LLM
 
-🔄 Fully automated — one command runs everything end-to-end
+🔄 Automated pipeline combining data retrieval and AI summarization
 
-### How It Works
+## How It Works
 Data Collection
 
-get_finance_news() → Pulls top finance headlines using News API
+get_finance_news() pulls top finance headlines from News API.
 
-get_stock_data() → Retrieves real-time prices, percentage changes, and trends for selected tickers via Yahoo Finance
+get_stock_data() retrieves recent stock prices and trends from Yahoo Finance.
 
-LLM Integration
+## LLM Integration
 
-Combines news + stock data into a single text prompt
+Combines news and stock data into a prompt.
 
-Sends prompt to Meta LLaMA 3.1 8B Instruct model via Hugging Face Inference API
+Sends the prompt to the Meta LLaMA 3.1 8B Instruct model via Hugging Face Inference API.
 
-Output
+## Output
 
-The model returns a concise, human-readable market summary
+Returns a concise, human-readable market summary.
 
-### Requirements
+## Requirements
 Python 3.9+
 
 Hugging Face account with API token
 
 News API key
 
-Dependencies (install with pip install -r requirements.txt):
+## Dependencies (install with pip install -r requirements.txt):
 
-txt
+nginx
 Copy
 Edit
 huggingface_hub
@@ -55,6 +79,7 @@ yfinance
 python-dotenv
 tqdm
 pyyaml
+streamlit  # For the full app version
 Setup
 Clone the Repository
 
@@ -76,22 +101,31 @@ bash
 Copy
 Edit
 pip install -r requirements.txt
-Create .env File
+Create .env File with Your API Keys
 
-env
+ini
 Copy
 Edit
 NEWS_API_KEY=your_news_api_key
 HF_TOKEN=your_huggingface_api_token
 Usage
-Run the script:
+Run the initial prototype script (no UI):
 
 bash
 Copy
 Edit
-python3 main.py
-Expected output:
+python3 basic_stock_summarizer.py
+This fetches data for a fixed ticker/news query and prints the market summary in the console.
 
+Run the full Streamlit app with interface:
+
+bash
+Copy
+Edit
+streamlit run main.py
+This launches a web app where you can enter tickers, select dates, view charts/news, and generate AI summaries interactively.
+
+Example Output (from the prototype)
 kotlin
 Copy
 Edit
@@ -100,20 +134,3 @@ Fetching stock market data...
 Generating AI summary...
 LLM Response:
 The U.S. stock market closed higher today, led by gains in technology...
-Example Output
-Input:
-
-News: "Dow gains as investors await inflation report"
-
-Stock data:
-
-bash
-Copy
-Edit
-AAPL: $192.22 (+0.55%)
-TSLA: $239.18 (-0.90%)
-MSFT: $423.35 (+1.12%)
-AI Summary:
-
-The market saw broad gains today, particularly in the tech sector, with Microsoft leading major indices higher. Tesla declined amid concerns over slowing demand, while Apple saw modest gains ahead of its product launch. Investors remain focused on tomorrow’s inflation report, which could influence Federal Reserve policy.
-
