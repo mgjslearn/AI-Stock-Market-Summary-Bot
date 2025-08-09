@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import requests
+import pandas as pd
 from datetime import date, timedelta
 from huggingface_hub import InferenceClient
 from typing import List, Optional
@@ -15,12 +16,12 @@ HF_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 MAX_NEWS = 5
 MAX_TOKENS = 400
 
-# --- Hugging Face client (lazy init) ---
+# -hugging Face client (lazy init) ---
 @st.cache_resource(show_spinner=False)
 def get_hf_client() -> InferenceClient:
     return InferenceClient(provider=HF_PROVIDER, api_key=HF_TOKEN)
 
-# --- News Fetcher ---
+# news Fetcher ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news(ticker: str, max_articles=MAX_NEWS) -> List[dict]:
     if not NEWS_API_KEY:
@@ -38,13 +39,13 @@ def fetch_news(ticker: str, max_articles=MAX_NEWS) -> List[dict]:
     data = resp.json()
     return data.get("articles", [])
 
-# --- Stock Data Fetcher ---
+# -stock Data Fetcher ---
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_data(ticker: str, start: date, end: date):
-    df = yf.download(ticker, start=start, end=end)
+    df = yf.download(ticker, start=start, end=end, auto_adjust=True)
     return df
 
-# --- Build AI Prompt ---
+# -building AI Prompt ---
 def build_prompt(news: List[dict], stock_df, ticker: str) -> str:
     news_lines = []
     for article in news:
@@ -53,12 +54,21 @@ def build_prompt(news: List[dict], stock_df, ticker: str) -> str:
         news_lines.append(f"- {title} ({source})")
     news_text = "\n".join(news_lines) if news_lines else "No relevant news available."
 
-    closes = stock_df['Close'] if not stock_df.empty else []
-    if not closes.empty:
-        latest_close = closes[-1]
-        prev_close = closes[-2] if len(closes) > 1 else latest_close
-        pct_change_day = (latest_close - prev_close) / prev_close * 100 if prev_close else 0.0
-        pct_change_period = (latest_close - closes[0]) / closes[0] * 100 if len(closes) > 1 else 0.0
+    # Handle multi-level columns from yfinance
+    if stock_df.empty:
+        closes = None
+    else:
+        # Check if columns are multi-level (ticker, column_name)
+        if isinstance(stock_df.columns, pd.MultiIndex):
+            closes = stock_df['Close'].iloc[:, 0]  # Get the first Close column
+        else:
+            closes = stock_df['Close']
+    
+    if closes is not None and not closes.empty:
+        latest_close = closes.iloc[-1]
+        prev_close = closes.iloc[-2] if len(closes) > 1 else latest_close
+        pct_change_day = (latest_close - prev_close) / prev_close * 100 if prev_close != 0 else 0.0
+        pct_change_period = (latest_close - closes.iloc[0]) / closes.iloc[0] * 100 if len(closes) > 1 and closes.iloc[0] != 0 else 0.0
         trend = "up" if pct_change_period > 0 else ("down" if pct_change_period < 0 else "flat")
         closes_str = "\n".join([f"{d.strftime('%Y-%m-%d')}: ${c:.2f}" for d, c in zip(stock_df.index.to_pydatetime(), closes)])
         stock_summary = (
@@ -84,7 +94,7 @@ Summary:
 """
     return prompt.strip()
 
-# --- Call Hugging Face Chat Completion ---
+# calling Hugging Face Chat Completion 
 def query_hf(prompt: str) -> Optional[str]:
     if not HF_TOKEN:
         return "Hugging Face API token not set."
@@ -104,7 +114,7 @@ def query_hf(prompt: str) -> Optional[str]:
     except Exception as e:
         return f"Error calling Hugging Face API: {e}"
 
-# --- Streamlit UI ---
+# used streamlit for UI 
 def main():
     st.set_page_config(page_title="📈 Finance AI Dashboard", layout="wide")
     st.title("📈 AI-Powered Finance Dashboard")
@@ -125,7 +135,7 @@ def main():
         st.warning("Please enter a stock ticker symbol.")
         return
 
-    # Fetch data
+    # fetching data
     with st.spinner("Fetching news..."):
         try:
             news = fetch_news(ticker)
@@ -140,7 +150,7 @@ def main():
             st.error(f"Failed to fetch stock data: {e}")
             stock_df = None
 
-    # Show news headlines
+    # latest news headlines
     st.subheader("📰 Latest News Headlines")
     if news:
         for article in news:
@@ -151,7 +161,7 @@ def main():
     else:
         st.info("No news found for this ticker.")
 
-    # Show stock chart
+    # stock chart
     st.subheader(f"📈 Stock Price Chart: {ticker}")
     if stock_df is not None and not stock_df.empty:
         st.line_chart(stock_df["Close"])
